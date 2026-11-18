@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rehearsal check V2</title>
+<style>
+body{font:15px/1.45 system-ui,sans-serif;margin:12px;color:#111;background:#fff}
+h1{font-size:19px;margin:0 0 4px}h2{font-size:16px;margin:14px 0 4px}
+.v{font-size:12px;color:#666}
+.card{border:1px solid #ccc;border-radius:10px;padding:8px 10px;margin:8px 0}
+.u{font-weight:700;font-size:16px}
+.ok{color:#08702a}.bad{color:#b00020;font-weight:700}
+code{font-size:13px;word-break:break-all}
+</style>
+</head>
+<body>
+<!-- สนามซ้อม S4-b: ตรวจโฮสต์ + สถานะในเครื่อง (ไม่ใช่ส่วนของแอป / ไม่ลงทะเบียน SW / ไม่เขียนหรือลบข้อมูลใด ๆ อ่านอย่างเดียว) -->
+<h1>ตรวจสนามซ้อม V2</h1>
+<div class="v">check2.html V2 · <span id="origin"></span> · <span id="time"></span></div>
+<div id="ctrl" class="card"></div>
+<h2>1) ไฟล์จากเซิร์ฟเวอร์</h2>
+<div id="out"></div>
+<h2>2) สถานะในเครื่อง (SW / แคช / ข้อมูล)</h2>
+<div id="local" class="card">กำลังอ่าน...</div>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+$('origin').textContent=location.origin;
+$('time').textContent=new Date().toLocaleString('th-TH');
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+// ไฟล์ไอคอนเดิม (ขนาด + sha256 16 ตัวแรก) ที่ตรวจไว้ตอนเตรียมสนามซ้อม
+const ICON={'/icon-192.png':[34167,'31e8f1cb27d62d23'],'/icon-512.png':[109031,'c3bbb9e3224f4936'],'/icon-maskable.png':[69842,'9977575821e227a0']};
+const FILES=['/','/index.html','/sw.js','/manifest.webmanifest','/icon-192.png','/icon-512.png','/icon-maskable.png'];
+async function sha(buf){const h=await crypto.subtle.digest('SHA-256',buf);return [...new Uint8Array(h)].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,16)}
+async function one(u){
+  const card=document.createElement('div');card.className='card';
+  let html='<div class="u">'+u+'</div>';
+  try{
+    const r=await fetch(u,{cache:'no-store'});
+    const ct=r.headers.get('content-type')||'-',cc=r.headers.get('cache-control')||'-';
+    const buf=await r.arrayBuffer();const h=await sha(buf);
+    html+='<div class="'+(r.status===200?'ok':'bad')+'">status: '+r.status+'</div>';
+    html+='<div>content-type: <code>'+esc(ct)+'</code> · cache-control: <code>'+esc(cc)+'</code></div>';
+    html+='<div>redirected: '+r.redirected+' · size: '+buf.byteLength+' bytes · sha256: <code>'+h+'</code></div>';
+    if(ICON[u]){const [n,s]=ICON[u];const same=buf.byteLength===n&&h===s&&/png/.test(ct);html+='<div class="'+(same?'ok':'bad')+'">'+(same?'ตรงกับไฟล์เดิม ✓':'ไม่ตรงกับไฟล์เดิม ✗ (ต้อง '+n+' bytes · '+s+')')+'</div>'}
+    if(u==='/'||u==='/index.html'){const t=new TextDecoder().decode(buf);const m=/<meta name="app-version" content="([^"]*)">/.exec(t);html+='<div>app-version: <b>'+esc(m?m[1]:'(ไม่มี)')+'</b> · '+t.length+' chars</div>'}
+    if(u==='/sw.js'){const t=new TextDecoder().decode(buf);const m=/const VER='([^']*)'/.exec(t);html+='<div>sw VER: <b>'+esc(m?m[1]:'(ไม่มี = sw ตัวเก่า)')+'</b></div>'}
+  }catch(e){html+='<div class="bad">ERROR: '+esc(e.message)+'</div>'}
+  card.innerHTML=html;$('out').appendChild(card);
+}
+async function local(){
+  let h='';
+  if('serviceWorker' in navigator){
+    const rs=await navigator.serviceWorker.getRegistrations();
+    if(!rs.length)h+='SW: ยังไม่มีลงทะเบียน<br>';
+    for(const r of rs){
+      const st=w=>w?new URL(w.scriptURL).pathname+' ('+w.state+')':'-';
+      h+='SW scope <b>'+new URL(r.scope).pathname+'</b> · active: <b>'+st(r.active)+'</b> · waiting: '+st(r.waiting)+' · installing: '+st(r.installing)+'<br>';
+    }
+  }
+  try{
+    const ks=await caches.keys();
+    h+='<br><b>แคช ('+ks.length+')</b><br>';
+    for(const k of ks){
+      const c=await caches.open(k);const reqs=await c.keys();let ver='';
+      const idx=reqs.find(q=>new URL(q.url).pathname==='/index.html');
+      if(idx){const t=await (await c.match(idx)).text();const m=/<meta name="app-version" content="([^"]*)">/.exec(t);ver=' · index ในแคช = '+(m?m[1]:'ไม่มีป้าย (V0.3.3 เดิม)')}
+      h+='• <code>'+esc(k)+'</code> · '+reqs.length+' ไฟล์'+esc(ver)+'<br>';
+    }
+  }catch(e){h+='แคช: อ่านไม่ได้ '+esc(e.message)+'<br>'}
+  h+='<br><b>ข้อมูลในเครื่อง localStorage (ชื่อคีย์ · ขนาด) — อ่านอย่างเดียว</b><br>';
+  const keys=Object.keys(localStorage).sort();
+  if(!keys.length)h+='(ว่าง)<br>';
+  for(const k of keys){
+    const v=localStorage.getItem(k)||'';let extra='';
+    try{
+      if(k==='led2-saved'){const a=JSON.parse(v);extra=' · '+a.length+' ป้าย: '+a.map(x=>typeof x==='string'?x:(x&&x.message)||'?').join(' / ')}
+      if(k==='led3-saved'){const o=JSON.parse(v);extra=' · '+(o.items||[]).length+' ป้าย: '+(o.items||[]).map(x=>x.message+' ['+(x.color||'-')+']').join(' / ')}
+      if(k==='led2-settings'){const o=JSON.parse(v);extra=' · color '+o.color+' · mode '+o.mode+' · style '+o.style}
+    }catch(e){extra=' · อ่าน JSON ไม่ได้'}
+    h+='• <code>'+esc(k)+'</code> · '+v.length+' ตัวอักษร'+esc(extra)+'<br>';
+  }
+  $('local').innerHTML=h;
+}
+(async()=>{
+  const c=navigator.serviceWorker&&navigator.serviceWorker.controller;
+  $('ctrl').innerHTML='หน้านี้ถูก SW คุมไหม: <b>'+(c?'ใช่ — ส่วนที่ 1 อาจมาจากแคชของ SW (ให้เปิดในแท็บไม่ระบุตัวตนเพื่อดูเซิร์ฟเวอร์ตรง)':'ไม่ — ส่วนที่ 1 มาจากเซิร์ฟเวอร์ตรง')+'</b>';
+  for(const u of FILES)await one(u);
+  await local();
+})();
+</script>
+</body>
+</html>
