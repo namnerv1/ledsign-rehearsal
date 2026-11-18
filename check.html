@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rehearsal host check V1</title>
+<style>
+body{font:15px/1.45 system-ui,sans-serif;margin:12px;color:#111;background:#fff}
+h1{font-size:19px;margin:0 0 4px}
+.v{font-size:12px;color:#666}
+.card{border:1px solid #ccc;border-radius:10px;padding:8px 10px;margin:8px 0}
+.u{font-weight:700;font-size:16px}
+.ok{color:#08702a}.bad{color:#b00020;font-weight:700}
+code{font-size:13px;word-break:break-all}
+button{font-size:16px;padding:10px 14px;border-radius:10px;border:1px solid #888;background:#eef;margin:6px 0}
+</style>
+</head>
+<body>
+<!-- สนามซ้อม S0: ตรวจสิ่งที่โฮสต์ส่งมาจริง (ไม่ใช่ส่วนของแอป ไม่ลงทะเบียน SW เองจนกว่าจะกดปุ่ม) -->
+<h1>ตรวจโฮสต์สนามซ้อม</h1>
+<div class="v">check.html V1 · <span id="origin"></span> · <span id="time"></span></div>
+<div id="ctrl" class="card"></div>
+<div id="out"></div>
+<button id="reg">ทดสอบลงทะเบียน /sw.js</button>
+<div id="regout" class="card">ยังไม่ได้กด</div>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+$('origin').textContent=location.origin;
+$('time').textContent=new Date().toLocaleString('th-TH');
+const FILES=['/','/index.html','/sw.js','/manifest.webmanifest','/icon-192.png','/icon-512.png','/icon-maskable.png','/no-such-file-404.png'];
+const EXPECT={'/sw.js':/javascript/,'/manifest.webmanifest':/json|manifest/,'/index.html':/html/,'/':/html/,'/icon-192.png':/png/,'/icon-512.png':/png/,'/icon-maskable.png':/png/};
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+async function one(u){
+  const card=document.createElement('div');card.className='card';
+  let html='<div class="u">'+u+'</div>';
+  try{
+    // 1) ไม่ตามการเปลี่ยนเส้นทาง: เห็นว่าโฮสต์ redirect หรือไม่
+    const m=await fetch(u,{cache:'no-store',redirect:'manual'});
+    if(m.type==='opaqueredirect'){html+='<div class="bad">REDIRECT (โฮสต์เปลี่ยนเส้นทาง)</div>'}
+    // 2) ตามปกติ: สถานะและหัวข้อจริง
+    const r=await fetch(u,{cache:'no-store'});
+    const ct=r.headers.get('content-type')||'-',cc=r.headers.get('cache-control')||'-';
+    const finalPath=new URL(r.url).pathname;
+    const want404=u.includes('no-such');
+    const stOk=want404?r.status===404:r.status===200;
+    const ctOk=want404||!EXPECT[u]||EXPECT[u].test(ct);
+    const ccOk=want404||/max-age=600/.test(cc);
+    html+='<div class="'+(stOk?'ok':'bad')+'">status: '+r.status+(want404?' (ต้องเป็น 404)':'')+'</div>';
+    html+='<div class="'+(ctOk?'ok':'bad')+'">content-type: <code>'+esc(ct)+'</code></div>';
+    html+='<div class="'+(ccOk?'ok':'bad')+'">cache-control: <code>'+esc(cc)+'</code></div>';
+    html+='<div class="'+(r.redirected||finalPath!==new URL(u,location.href).pathname?'bad':'ok')+'">redirected: '+r.redirected+' · final: <code>'+esc(finalPath)+'</code></div>';
+    if(u==='/index.html'||u==='/'){const t=await r.text();const m2=/<title>([^<]*)<\/title>/.exec(t);html+='<div>title: <code>'+esc(m2?m2[1]:'-')+'</code> · '+t.length+' chars</div>'}
+  }catch(e){html+='<div class="bad">ERROR: '+esc(e.message)+'</div>'}
+  card.innerHTML=html;$('out').appendChild(card);
+}
+async function regs(){
+  if(!('serviceWorker' in navigator))return 'ไม่รองรับ SW';
+  const rs=await navigator.serviceWorker.getRegistrations();
+  if(!rs.length)return 'ยังไม่มี SW ลงทะเบียน';
+  return rs.map(r=>'scope: '+new URL(r.scope).pathname+' · active: '+(r.active?new URL(r.active.scriptURL).pathname+' ('+r.active.state+')':'-')).join('<br>');
+}
+(async()=>{
+  const c=navigator.serviceWorker&&navigator.serviceWorker.controller;
+  $('ctrl').innerHTML='หน้านี้ถูก SW คุมไหม: <b>'+(c?'ใช่ — ผลข้างล่างอาจมาจาก SW':'ไม่ — ผลข้างล่างมาจากโฮสต์ตรง')+'</b><br>'+await regs();
+  for(const u of FILES)await one(u);
+})();
+$('reg').onclick=async()=>{
+  $('regout').textContent='กำลังลงทะเบียน...';
+  try{
+    const r=await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;await new Promise(z=>setTimeout(z,1500));
+    let cs='-';try{cs=(await caches.keys()).join(', ')||'(none)'}catch(e){}
+    $('regout').innerHTML='<span class="ok">สำเร็จ</span> scope: <b>'+new URL(r.scope).pathname+'</b><br>'+await regs()+'<br>cache: '+esc(cs);
+  }catch(e){$('regout').innerHTML='<span class="bad">ล้มเหลว: '+esc(e.message)+'</span>'}
+};
+</script>
+</body>
+</html>
